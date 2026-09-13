@@ -1,10 +1,11 @@
+import os
 import discord
 from discord.ext import commands
 import random
 import asyncio
 import aiohttp
 
-TOKEN = "token here"  # Replace with your bot's token
+TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
