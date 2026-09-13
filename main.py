@@ -24,10 +24,16 @@ afk_users = {}
 
 @bot.event
 async def on_ready():
-    print(f'🔥 {bot.user} ONLINE - MEGA FUN BOT READY!')
+    print(f'🔥 {bot.user} ONLINE - MEGA FUN BOT READY! - V4 INSTANT FIX')
     try:
+        for guild in bot.guilds:
+            try:
+                await bot.tree.sync(guild=guild)
+                print(f'✅ Synced to {guild.name} - INSTANT!')
+            except Exception as e:
+                print(f'Failed {guild.name}: {e}')
         await bot.tree.sync()
-        print('Slash commands synced!')
+        print('Slash commands synced globally too!')
     except Exception as e:
         print(e)
 
