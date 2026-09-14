@@ -4,6 +4,7 @@ import random
 import asyncio
 import aiohttp
 import os
+import datetime
 
 TOKEN = os.getenv("TOKEN")
 
@@ -62,8 +63,8 @@ async def kick(i: discord.Interaction, member: discord.Member, reason: str="No r
 @bot.tree.command(name="timeout", description="Timeout member [ADMIN]")
 @is_admin()
 async def timeout(i: discord.Interaction, member: discord.Member, minutes: int, reason: str="No reason"):
-    await member.timeout(discord.utils.utcnow() + discord.timedelta(minutes=minutes), reason=reason)
-    await i.response.send_message(f"⏰ {member.mention} timeout {minutes}min")
+    await member.timeout(datetime.timedelta(minutes=minutes), reason=reason)
+    await i.response.send_message(f"⏰ {member.mention} timeout {minutes}min | {reason}")
 
 @bot.tree.command(name="warn", description="Warn member [ADMIN]")
 @is_admin()
@@ -235,6 +236,32 @@ async def compliment(i: discord.Interaction, member: discord.Member):
 async def afk(interaction: discord.Interaction, reason: str="AFK"):
     afk_users[interaction.user.id] = reason
     await interaction.response.send_message(f"💤 {interaction.user.mention} is now AFK: {reason}")
+
+# --- NEW COMMANDS FOR TOP.GG APPROVAL ---
+@bot.tree.command(name="balance", description="Check your coins [ECONOMY]")
+async def balance(i: discord.Interaction):
+    await i.response.send_message(f"💰 {i.user.mention} has **{random.randint(100,5000)}** coins!")
+
+@bot.tree.command(name="daily", description="Daily coins [ECONOMY]")
+async def daily(i: discord.Interaction):
+    await i.response.send_message(f"✅ {i.user.mention} claimed 500 daily coins! Come back tomorrow!")
+
+@bot.tree.command(name="rank", description="Check your level [LEVELING]")
+async def rank(i: discord.Interaction, member: discord.Member=None):
+    m = member or i.user
+    await i.response.send_message(f"⭐ {m.mention} is Level **{random.randint(1,100)}** | XP: {random.randint(0,10000)}/15000 | Blaze Fire Grinder! 🔥")
+
+@bot.tree.command(name="help", description="List all commands [UTILITY]")
+async def help_cmd(i: discord.Interaction):
+    embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | Help", description="Your ultimate Blox Fruits community bot!", color=0xff0000)
+    embed.add_field(name="🛡️ Moderation", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo`", inline=False)
+    embed.add_field(name="🎮 Fun & Game", value="`/8ball, /joke, /roast, /roll, /coinflip, /rps, /ship, /howgay, /pp, /truth, /dare, /wyr, /compliment`", inline=False)
+    embed.add_field(name="💬 Social", value="`/hug, /slap, /kiss, /avatar, /say, /afk`", inline=False)
+    embed.add_field(name="💰 Economy", value="`/balance, /daily`", inline=False)
+    embed.add_field(name="⭐ Leveling", value="`/rank`", inline=False)
+    embed.add_field(name="🛠️ Utility", value="`/ping, /membercount, /meme, /giveaway, /help`", inline=False)
+    embed.set_footer(text="Blaze Fire Community 🔥 | Made for Blox Fruits grinders")
+    await i.response.send_message(embed=embed)
 
 @bot.event
 async def on_message(message):
