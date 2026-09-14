@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 import os
 import datetime
+import json
 
 TOKEN = os.getenv("TOKEN")
 
@@ -13,15 +14,31 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# DATA FILES
+LEVEL_FILE = "level_data.json"
+CONFIG_FILE = "config_data.json"
+
+def load_json(file):
+    if os.path.exists(file):
+        try:
+            with open(file, "r") as f: return json.load(f)
+        except: return {}
+    return {}
+
+def save_json(file, data):
+    with open(file, "w") as f: json.dump(f, data, indent=4)
+
+level_data = load_json(LEVEL_FILE) # {guild_id: {user_id: {level, msgs}}}
+config_data = load_json(CONFIG_FILE) # {guild_id: {level_channel: id}}
+auto_roles = {}
+afk_users = {}
+
 jokes = ["Why did Blox Fruit go to school? To become more appeeling! 🍎","Your bounty so low, Marines use you as tutorial 😂","Bro still fighting with Combat, no Haki 💀"]
 roasts = ["You fight like a level 1 bandit 💀","Your PvP so bad, NPCs dodge you","Go touch grass... I mean Sea Beasts","Your combo? Punch, miss, run 😂","Even Buggy would win against you"]
 balls = ["Yes ✅","No ❌","Maybe 🤔","Definitely! 🔥","Never 💀","Ask again later","Absolutely not bruh"]
 truths = ["What's your biggest secret? 🤫","Who do you have a crush on?","What's your worst Blox Fruits death?","Have you ever scammed?"]
 dares = ["Send 'I love Blox Fruits' in general chat","Change your nickname to Noob for 10 min","Roast yourself 😂","Say you are level 1"]
 wyr = ["Would you rather have permanent Dough or permanent Dragon? 🍩🐉","Would you rather be banned from Blox Fruits or Discord?","Would you rather fight 10 Sea Beasts or 1 admin?"]
-
-auto_roles = {}
-afk_users = {}
 
 @bot.event
 async def on_ready():
@@ -48,6 +65,7 @@ def is_admin():
     def p(i: discord.Interaction): return i.user.guild_permissions.administrator
     return discord.app_commands.check(p)
 
+# ========= ADMIN =========
 @bot.tree.command(name="ban", description="Ban member [ADMIN]")
 @is_admin()
 async def ban(i: discord.Interaction, member: discord.Member, reason: str="No reason"):
@@ -62,7 +80,7 @@ async def kick(i: discord.Interaction, member: discord.Member, reason: str="No r
 
 @bot.tree.command(name="timeout", description="Timeout member [ADMIN]")
 @is_admin()
-async def timeout(i: discord.Interaction, member: discord.Member, minutes: int, reason: str="No reason"):
+async def timeout_cmd(i: discord.Interaction, member: discord.Member, minutes: int, reason: str="No reason"):
     await member.timeout(datetime.timedelta(minutes=minutes), reason=reason)
     await i.response.send_message(f"⏰ {member.mention} timeout {minutes}min | {reason}")
 
@@ -87,14 +105,12 @@ async def poll(interaction: discord.Interaction, question: str, option1: str, op
     if option4: options.append(option4)
     emojis = ["1️⃣","2️⃣","3️⃣","4️⃣"]
     desc = ""
-    for idx, opt in enumerate(options):
-        desc += f"{emojis[idx]} {opt}\n"
+    for idx, opt in enumerate(options): desc += f"{emojis[idx]} {opt}\n"
     embed = discord.Embed(title=f"📊 {question}", description=desc, color=0x00ff00)
     embed.set_footer(text=f"Poll by {interaction.user.name}")
     await interaction.response.send_message(embed=embed)
     msg = await interaction.original_response()
-    for idx in range(len(options)):
-        await msg.add_reaction(emojis[idx])
+    for idx in range(len(options)): await msg.add_reaction(emojis[idx])
 
 @bot.tree.command(name="clear", description="Delete messages [ADMIN]")
 @is_admin()
@@ -132,8 +148,7 @@ async def serverinfo(interaction: discord.Interaction):
     embed.add_field(name="Boosts", value=str(g.premium_subscription_count), inline=True)
     embed.add_field(name="Channels", value=str(len(g.channels)), inline=True)
     embed.add_field(name="Roles", value=str(len(g.roles)), inline=True)
-    if g.icon:
-        embed.set_thumbnail(url=g.icon.url)
+    if g.icon: embed.set_thumbnail(url=g.icon.url)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="userinfo", description="User info [ADMIN]")
@@ -148,6 +163,48 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
     embed.set_thumbnail(url=member.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
+@bot.tree.command(name="nick", description="Change nickname [ADMIN]")
+@is_admin()
+async def nick(interaction: discord.Interaction, member: discord.Member, new_nickname: str):
+    try:
+        await member.edit(nick=new_nickname)
+        await interaction.response.send_message(f"✅ Changed {member.mention} nickname to **{new_nickname}**")
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ I can't change that user! My role must be higher!", ephemeral=True)
+
+@bot.tree.command(name="announce", description="Announce embed [ADMIN]")
+@is_admin()
+async def announce(interaction: discord.Interaction, channel: discord.TextChannel, message: str, title: str="📢 Announcement"):
+    embed = discord.Embed(title=title, description=message, color=0xff0000)
+    embed.set_footer(text=f"Announced by {interaction.user.name} | Blaze Fire 🔥")
+    if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
+    await channel.send(embed=embed)
+    await interaction.response.send_message(f"✅ Announced in {channel.mention}!", ephemeral=True)
+
+# LV SYSTEM - GROUP
+lv_group = discord.app_commands.Group(name="lv", description="Leveling system")
+
+@lv_group.command(name="setup", description="Setup leveling channel [ADMIN]")
+@is_admin()
+async def lv_setup(interaction: discord.Interaction, channel: discord.TextChannel):
+    gid = str(interaction.guild.id)
+    if gid not in config_data: config_data[gid] = {}
+    config_data[gid]["level_channel"] = channel.id
+    save_json(CONFIG_FILE, config_data)
+    await interaction.response.send_message(f"✅ Level up messages will be sent in {channel.mention}!\nSystem: **10 messages = 1 Level Up** 🔥")
+
+@lv_group.command(name="setup_channel", description="Setup leveling channel [ADMIN] (alias)")
+@is_admin()
+async def lv_setup_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    gid = str(interaction.guild.id)
+    if gid not in config_data: config_data[gid] = {}
+    config_data[gid]["level_channel"] = channel.id
+    save_json(CONFIG_FILE, config_data)
+    await interaction.response.send_message(f"✅ Level up channel set to {channel.mention}! 10 msgs = 1 Level")
+
+bot.tree.add_command(lv_group)
+
+# ========= MOD =========
 @bot.tree.command(name="meme", description="Random meme [MOD]")
 @is_mod()
 async def meme(i: discord.Interaction):
@@ -171,6 +228,7 @@ async def giveaway(i: discord.Interaction, prize: str, minutes: int=1):
     if users: await i.channel.send(f"🎉 Winner of **{prize}** is {random.choice(users).mention}!")
     else: await i.channel.send("No one entered 😢")
 
+# ========= EVERYONE =========
 @bot.tree.command(name="ping", description="Bot ping")
 async def ping(i: discord.Interaction): await i.response.send_message(f"🏓 {round(bot.latency*1000)}ms")
 @bot.tree.command(name="membercount", description="Member count")
@@ -236,37 +294,62 @@ async def compliment(i: discord.Interaction, member: discord.Member):
 async def afk(interaction: discord.Interaction, reason: str="AFK"):
     afk_users[interaction.user.id] = reason
     await interaction.response.send_message(f"💤 {interaction.user.mention} is now AFK: {reason}")
-
-# --- NEW COMMANDS FOR TOP.GG APPROVAL ---
 @bot.tree.command(name="balance", description="Check your coins [ECONOMY]")
-async def balance(i: discord.Interaction):
-    await i.response.send_message(f"💰 {i.user.mention} has **{random.randint(100,5000)}** coins!")
-
+async def balance(i: discord.Interaction): await i.response.send_message(f"💰 {i.user.mention} has **{random.randint(100,5000)}** coins!")
 @bot.tree.command(name="daily", description="Daily coins [ECONOMY]")
-async def daily(i: discord.Interaction):
-    await i.response.send_message(f"✅ {i.user.mention} claimed 500 daily coins! Come back tomorrow!")
-
+async def daily(i: discord.Interaction): await i.response.send_message(f"✅ {i.user.mention} claimed 500 daily coins! Come back tomorrow!")
 @bot.tree.command(name="rank", description="Check your level [LEVELING]")
-async def rank(i: discord.Interaction, member: discord.Member=None):
+async def rank_cmd(i: discord.Interaction, member: discord.Member=None):
     m = member or i.user
-    await i.response.send_message(f"⭐ {m.mention} is Level **{random.randint(1,100)}** | XP: {random.randint(0,10000)}/15000 | Blaze Fire Grinder! 🔥")
+    gid = str(i.guild.id)
+    uid = str(m.id)
+    lvl = level_data.get(gid, {}).get(uid, {}).get("level", 0)
+    msgs = level_data.get(gid, {}).get(uid, {}).get("msgs", 0)
+    await i.response.send_message(f"⭐ {m.mention} is Level **{lvl}** | Messages: {msgs} | Need {10 - (msgs % 10)} more for next level! 🔥")
 
-@bot.tree.command(name="help", description="List all commands [UTILITY]")
+@bot.tree.command(name="help", description="List all bot commands [UTILITY]")
 async def help_cmd(i: discord.Interaction):
-    embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | Help", description="Your ultimate Blox Fruits community bot!", color=0xff0000)
-    embed.add_field(name="🛡️ Moderation", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo`", inline=False)
+    embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | All Commands", description="Blaze Fire Community's ultimate bot! 43 commands", color=0xff0000)
+    embed.add_field(name="🛡️ Admin", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo, /nick, /announce, /lv setup, /lv setup_channel`", inline=False)
     embed.add_field(name="🎮 Fun & Game", value="`/8ball, /joke, /roast, /roll, /coinflip, /rps, /ship, /howgay, /pp, /truth, /dare, /wyr, /compliment`", inline=False)
     embed.add_field(name="💬 Social", value="`/hug, /slap, /kiss, /avatar, /say, /afk`", inline=False)
     embed.add_field(name="💰 Economy", value="`/balance, /daily`", inline=False)
-    embed.add_field(name="⭐ Leveling", value="`/rank`", inline=False)
+    embed.add_field(name="⭐ Leveling", value="`/rank` - 10 messages = 1 level up! Level message goes to channel set by /lv setup", inline=False)
     embed.add_field(name="🛠️ Utility", value="`/ping, /membercount, /meme, /giveaway, /help`", inline=False)
-    embed.set_footer(text="Blaze Fire Community 🔥 | Made for Blox Fruits grinders")
+    embed.set_footer(text="Blaze Fire Community 🔥 | 10 msgs = 1 Level")
     await i.response.send_message(embed=embed)
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
-        return
+    if message.author.bot: return
+
+    # LEVEL SYSTEM - 10 msgs = 1 level
+    if message.guild:
+        gid = str(message.guild.id)
+        uid = str(message.author.id)
+        if gid not in level_data: level_data[gid] = {}
+        if uid not in level_data[gid]: level_data[gid][uid] = {"level": 0, "msgs": 0}
+
+        level_data[gid][uid]["msgs"] += 1
+        msgs = level_data[gid][uid]["msgs"]
+
+        if msgs % 10 == 0: # Every 10 messages level up
+            level_data[gid][uid]["level"] += 1
+            new_level = level_data[gid][uid]["level"]
+            save_json(LEVEL_FILE, level_data)
+
+            # Send level up message to selected channel
+            if gid in config_data and "level_channel" in config_data[gid]:
+                ch_id = config_data[gid]["level_channel"]
+                ch = message.guild.get_channel(ch_id)
+                if ch:
+                    embed = discord.Embed(title="🎉 LEVEL UP!", description=f"GG {message.author.mention}! You reached **Level {new_level}**! 🔥\nKeep chatting in Blaze Fire!", color=0x00ff00)
+                    embed.set_thumbnail(url=message.author.display_avatar.url)
+                    try: await ch.send(embed=embed)
+                    except: pass
+        else:
+            if msgs % 5 == 0: save_json(LEVEL_FILE, level_data)
+
     if message.author.id in afk_users and not message.content.startswith("!"):
         del afk_users[message.author.id]
         await message.channel.send(f"👋 Welcome back {message.author.mention}! AFK removed.")
