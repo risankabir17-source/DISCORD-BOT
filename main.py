@@ -6,6 +6,7 @@ import aiohttp
 import os
 import datetime
 import json
+import math
 
 TOKEN = os.getenv("TOKEN")
 
@@ -14,7 +15,6 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# DATA FILES
 LEVEL_FILE = "level_data.json"
 CONFIG_FILE = "config_data.json"
 
@@ -28,10 +28,11 @@ def load_json(file):
 def save_json(file, data):
     with open(file, "w") as f: json.dump(f, data, indent=4)
 
-level_data = load_json(LEVEL_FILE) # {guild_id: {user_id: {level, msgs}}}
-config_data = load_json(CONFIG_FILE) # {guild_id: {level_channel: id}}
+level_data = load_json(LEVEL_FILE)
+config_data = load_json(CONFIG_FILE)
 auto_roles = {}
 afk_users = {}
+xp_cooldown = {}
 
 jokes = ["Why did Blox Fruit go to school? To become more appeeling! 🍎","Your bounty so low, Marines use you as tutorial 😂","Bro still fighting with Combat, no Haki 💀"]
 roasts = ["You fight like a level 1 bandit 💀","Your PvP so bad, NPCs dodge you","Go touch grass... I mean Sea Beasts","Your combo? Punch, miss, run 😂","Even Buggy would win against you"]
@@ -51,7 +52,7 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-    role_id = auto_roles.get(member.guild.id)
+    role_id = auto_roles.get(member.guild.id) or config_data.get(str(member.guild.id), {}).get("autorole")
     if role_id:
         role = member.guild.get_role(role_id)
         if role:
@@ -95,6 +96,10 @@ async def warn(i: discord.Interaction, member: discord.Member, reason: str="No r
 @is_admin()
 async def autorole(i: discord.Interaction, role: discord.Role):
     auto_roles[i.guild.id] = role.id
+    gid = str(i.guild.id)
+    if gid not in config_data: config_data[gid] = {}
+    config_data[gid]["autorole"] = role.id
+    save_json(CONFIG_FILE, config_data)
     await i.response.send_message(f"✅ Auto role -> {role.mention}")
 
 @bot.tree.command(name="poll", description="Create a poll [ADMIN]")
@@ -191,7 +196,7 @@ async def lv_setup(interaction: discord.Interaction, channel: discord.TextChanne
     if gid not in config_data: config_data[gid] = {}
     config_data[gid]["level_channel"] = channel.id
     save_json(CONFIG_FILE, config_data)
-    await interaction.response.send_message(f"✅ Level up messages will be sent in {channel.mention}!\nSystem: **10 messages = 1 Level Up** 🔥")
+    await interaction.response.send_message(f"✅ Level up messages will be sent in {channel.mention}!\nSystem: **MEE6 Style XP 15-25 per minute** 🔥")
 
 @lv_group.command(name="setup_channel", description="Setup leveling channel [ADMIN] (alias)")
 @is_admin()
@@ -200,7 +205,7 @@ async def lv_setup_channel(interaction: discord.Interaction, channel: discord.Te
     if gid not in config_data: config_data[gid] = {}
     config_data[gid]["level_channel"] = channel.id
     save_json(CONFIG_FILE, config_data)
-    await interaction.response.send_message(f"✅ Level up channel set to {channel.mention}! 10 msgs = 1 Level")
+    await interaction.response.send_message(f"✅ Level up channel set to {channel.mention}! MEE6 Style XP")
 
 bot.tree.add_command(lv_group)
 
@@ -298,57 +303,100 @@ async def afk(interaction: discord.Interaction, reason: str="AFK"):
 async def balance(i: discord.Interaction): await i.response.send_message(f"💰 {i.user.mention} has **{random.randint(100,5000)}** coins!")
 @bot.tree.command(name="daily", description="Daily coins [ECONOMY]")
 async def daily(i: discord.Interaction): await i.response.send_message(f"✅ {i.user.mention} claimed 500 daily coins! Come back tomorrow!")
+
 @bot.tree.command(name="rank", description="Check your level [LEVELING]")
 async def rank_cmd(i: discord.Interaction, member: discord.Member=None):
     m = member or i.user
     gid = str(i.guild.id)
     uid = str(m.id)
-    lvl = level_data.get(gid, {}).get(uid, {}).get("level", 0)
-    msgs = level_data.get(gid, {}).get(uid, {}).get("msgs", 0)
-    await i.response.send_message(f"⭐ {m.mention} is Level **{lvl}** | Messages: {msgs} | Need {10 - (msgs % 10)} more for next level! 🔥")
+    data = level_data.get(gid, {}).get(uid, {"xp":0, "level":0, "msgs":0})
+    xp = data.get("xp", 0)
+    lvl = data.get("level", 0)
+    next_xp = int(((lvl+1)/0.1)**2)
+    curr_xp = int((lvl/0.1)**2)
+    need = next_xp - xp
+    prog = xp - curr_xp
+    total = next_xp - curr_xp
+    pct = prog/total if total else 0
+    bar = "█"*int(pct*10) + "░"*(10-int(pct*10))
+    embed = discord.Embed(title=f"⭐ {m.display_name}'s Rank", color=0x5865F2)
+    embed.add_field(name="Level", value=str(lvl), inline=True)
+    embed.add_field(name="XP", value=f"{xp} / {next_xp}", inline=True)
+    embed.add_field(name="Progress", value=f"`{bar}` {int(pct*100)}%\n{need} XP to next level!", inline=False)
+    embed.set_thumbnail(url=m.display_avatar.url)
+    await i.response.send_message(embed=embed)
+
+@bot.tree.command(name="leaderboard", description="Top 10 leaderboard")
+async def leaderboard(i: discord.Interaction):
+    gid = str(i.guild.id)
+    if gid not in level_data or not level_data[gid]:
+        await i.response.send_message("No data yet!")
+        return
+    sorted_users = sorted(level_data[gid].items(), key=lambda x: x[1].get("xp",0), reverse=True)[:10]
+    desc = ""
+    for idx, (uid, data) in enumerate(sorted_users, 1):
+        desc += f"**{idx}.** <@{uid}> — Level **{data.get('level',0)}** ({data.get('xp',0)} XP)\n"
+    embed = discord.Embed(title=f"🏆 {i.guild.name} Leaderboard", description=desc, color=0xFFD700)
+    await i.response.send_message(embed=embed)
 
 @bot.tree.command(name="help", description="List all bot commands [UTILITY]")
 async def help_cmd(i: discord.Interaction):
-    embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | All Commands", description="Blaze Fire Community's ultimate bot! 43 commands", color=0xff0000)
+    embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | All Commands", description="Blaze Fire Community's ultimate bot! MEE6 style leveling!", color=0xff0000)
     embed.add_field(name="🛡️ Admin", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo, /nick, /announce, /lv setup, /lv setup_channel`", inline=False)
     embed.add_field(name="🎮 Fun & Game", value="`/8ball, /joke, /roast, /roll, /coinflip, /rps, /ship, /howgay, /pp, /truth, /dare, /wyr, /compliment`", inline=False)
     embed.add_field(name="💬 Social", value="`/hug, /slap, /kiss, /avatar, /say, /afk`", inline=False)
     embed.add_field(name="💰 Economy", value="`/balance, /daily`", inline=False)
-    embed.add_field(name="⭐ Leveling", value="`/rank` - 10 messages = 1 level up! Level message goes to channel set by /lv setup", inline=False)
+    embed.add_field(name="⭐ Leveling [MEE6 STYLE]", value="`/rank, /leaderboard` - 15-25 XP per 60s! Level = 0.1 * sqrt(XP)", inline=False)
     embed.add_field(name="🛠️ Utility", value="`/ping, /membercount, /meme, /giveaway, /help`", inline=False)
-    embed.set_footer(text="Blaze Fire Community 🔥 | 10 msgs = 1 Level")
+    embed.set_footer(text="Blaze Fire Community 🔥 | MEE6 Style XP")
     await i.response.send_message(embed=embed)
 
+# ========= NEW MEE6 STYLE LV =========
 @bot.event
 async def on_message(message):
     if message.author.bot: return
 
-    # LEVEL SYSTEM - 10 msgs = 1 level
     if message.guild:
         gid = str(message.guild.id)
         uid = str(message.author.id)
-        if gid not in level_data: level_data[gid] = {}
-        if uid not in level_data[gid]: level_data[gid][uid] = {"level": 0, "msgs": 0}
+        now = datetime.datetime.now().timestamp()
 
-        level_data[gid][uid]["msgs"] += 1
-        msgs = level_data[gid][uid]["msgs"]
+        if uid not in xp_cooldown or now - xp_cooldown[uid] >= 60:
+            xp_cooldown[uid] = now
+            xp_gain = random.randint(15, 25)
 
-        if msgs % 10 == 0: # Every 10 messages level up
-            level_data[gid][uid]["level"] += 1
-            new_level = level_data[gid][uid]["level"]
-            save_json(LEVEL_FILE, level_data)
+            if gid not in level_data: level_data[gid] = {}
+            if uid not in level_data[gid]: level_data[gid][uid] = {"xp":0, "level":0, "msgs":0}
 
-            # Send level up message to selected channel
-            if gid in config_data and "level_channel" in config_data[gid]:
-                ch_id = config_data[gid]["level_channel"]
-                ch = message.guild.get_channel(ch_id)
-                if ch:
-                    embed = discord.Embed(title="🎉 LEVEL UP!", description=f"GG {message.author.mention}! You reached **Level {new_level}**! 🔥\nKeep chatting in Blaze Fire!", color=0x00ff00)
-                    embed.set_thumbnail(url=message.author.display_avatar.url)
-                    try: await ch.send(embed=embed)
-                    except: pass
+            # keep old msgs count for backward compat
+            if "xp" not in level_data[gid][uid]: level_data[gid][uid]["xp"] = 0
+            if "msgs" not in level_data[gid][uid]: level_data[gid][uid]["msgs"] = 0
+
+            level_data[gid][uid]["xp"] += xp_gain
+            level_data[gid][uid]["msgs"] += 1
+
+            old_level = level_data[gid][uid]["level"]
+            new_level = int(0.1 * math.sqrt(level_data[gid][uid]["xp"]))
+
+            if new_level > old_level:
+                level_data[gid][uid]["level"] = new_level
+                save_json(LEVEL_FILE, level_data)
+                if gid in config_data and "level_channel" in config_data[gid]:
+                    ch_id = config_data[gid]["level_channel"]
+                    ch = message.guild.get_channel(ch_id)
+                    if ch:
+                        embed = discord.Embed(title="🎉 LEVEL UP!", description=f"GG {message.author.mention}! You reached **Level {new_level}**! 🔥", color=0x00ff00)
+                        embed.set_thumbnail(url=message.author.display_avatar.url)
+                        try: await ch.send(embed=embed)
+                        except: pass
+            else:
+                if random.random() < 0.15:
+                    save_json(LEVEL_FILE, level_data)
         else:
-            if msgs % 5 == 0: save_json(LEVEL_FILE, level_data)
+            # still count messages even on cooldown
+            if gid in level_data and uid in level_data[gid]:
+                level_data[gid][uid].setdefault("msgs",0)
+                level_data[gid][uid]["msgs"] += 1
 
     if message.author.id in afk_users and not message.content.startswith("!"):
         del afk_users[message.author.id]
