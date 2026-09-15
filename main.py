@@ -17,6 +17,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 LEVEL_FILE = "level_data.json"
 CONFIG_FILE = "config_data.json"
+SPAM_FILE = "spam_config.json"
 
 def load_json(file):
     if os.path.exists(file):
@@ -30,6 +31,8 @@ def save_json(file, data):
 
 level_data = load_json(LEVEL_FILE)
 config_data = load_json(CONFIG_FILE)
+spam_config = load_json(SPAM_FILE)
+spam_tracker = {}
 auto_roles = {}
 afk_users = {}
 xp_cooldown = {}
@@ -209,6 +212,73 @@ async def lv_setup_channel(interaction: discord.Interaction, channel: discord.Te
 
 bot.tree.add_command(lv_group)
 
+# ========= SPAM SYSTEM - GROUP =========
+spam_group = discord.app_commands.Group(name="spam", description="Anti-spam system")
+
+@spam_group.command(name="setup", description="Setup anti-spam system [ADMIN]")
+@is_admin()
+async def spam_setup(interaction: discord.Interaction, log_channel: discord.TextChannel=None):
+    gid = str(interaction.guild.id)
+    if gid not in spam_config:
+        spam_config[gid] = {}
+    spam_config[gid]["enabled"] = True
+    if log_channel:
+        spam_config[gid]["log_channel"] = log_channel.id
+    save_json(SPAM_FILE, spam_config)
+    await interaction.response.send_message(f"✅ Anti-Spam ENABLED! 3 msgs in 5 sec = Spam\n- Will DM all Admins with server & user info\n- Auto-delete spam\n{f'- Logs in {log_channel.mention}' if log_channel else ''}")
+
+@spam_group.command(name="disable", description="Disable anti-spam [ADMIN]")
+@is_admin()
+async def spam_disable(interaction: discord.Interaction):
+    gid = str(interaction.guild.id)
+    if gid in spam_config:
+        spam_config[gid]["enabled"] = False
+        save_json(SPAM_FILE, spam_config)
+    await interaction.response.send_message("❌ Anti-Spam DISABLED!", ephemeral=True)
+
+bot.tree.add_command(spam_group)
+
+async def handle_spam(guild, member, channel):
+    gid = str(guild.id)
+    if gid not in spam_config or not spam_config[gid].get("enabled"):
+        return False
+    now = datetime.datetime.now().timestamp()
+    if gid not in spam_tracker: spam_tracker[gid] = {}
+    uid = str(member.id)
+    if uid not in spam_tracker[gid]: spam_tracker[gid][uid] = []
+    spam_tracker[gid][uid].append(now)
+    spam_tracker[gid][uid] = [t for t in spam_tracker[gid][uid] if now - t < 5]
+    if len(spam_tracker[gid][uid]) >= 3:
+        spam_tracker[gid][uid] = []
+        try:
+            def check(m):
+                return m.author.id == member.id and (now - m.created_at.timestamp() < 6)
+            deleted = await channel.purge(limit=10, check=check)
+        except:
+            deleted = []
+        admins = [m for m in guild.members if m.guild_permissions.administrator and not m.bot]
+        for admin in admins:
+            try:
+                embed = discord.Embed(title="🚨 SPAM DETECTED!", color=0xff0000, timestamp=datetime.datetime.now())
+                embed.add_field(name="Server", value=f"**{guild.name}**\nID: {guild.id}", inline=False)
+                embed.add_field(name="Spammer", value=f"{member.mention}\n`{member.name}` | {member.id}", inline=False)
+                embed.add_field(name="Channel", value=f"{channel.mention}", inline=False)
+                embed.add_field(name="Deleted", value=f"{len(deleted)} msgs deleted", inline=False)
+                embed.set_thumbnail(url=member.display_avatar.url)
+                await admin.send(embed=embed)
+            except: pass
+        if "log_channel" in spam_config.get(gid, {}):
+            ch = guild.get_channel(spam_config[gid]["log_channel"])
+            if ch:
+                try:
+                    await ch.send(embed=discord.Embed(title="🚨 Spam", description=f"{member.mention} spammed in {channel.mention} - {len(deleted)} msgs deleted", color=0xff0000))
+                except: pass
+        try:
+            await channel.send(f"🧹 Anti-Spam: Deleted {len(deleted)} msgs from {member.mention}! No spamming! (3 msgs / 5s)", delete_after=5)
+        except: pass
+        return True
+    return False
+
 # ========= MOD =========
 @bot.tree.command(name="meme", description="Random meme [MOD]")
 @is_mod()
@@ -342,21 +412,26 @@ async def leaderboard(i: discord.Interaction):
 @bot.tree.command(name="help", description="List all bot commands [UTILITY]")
 async def help_cmd(i: discord.Interaction):
     embed = discord.Embed(title="🔥 Rexo - Blaze Fire Bot | All Commands", description="Blaze Fire Community's ultimate bot! MEE6 style leveling!", color=0xff0000)
-    embed.add_field(name="🛡️ Admin", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo, /nick, /announce, /lv setup, /lv setup_channel`", inline=False)
+    embed.add_field(name="🛡️ Admin", value="`/ban, /kick, /timeout, /warn, /clear, /lock, /unlock, /addrole, /autorole, /poll, /serverinfo, /userinfo, /nick, /announce, /lv setup, /spam setup`", inline=False)
     embed.add_field(name="🎮 Fun & Game", value="`/8ball, /joke, /roast, /roll, /coinflip, /rps, /ship, /howgay, /pp, /truth, /dare, /wyr, /compliment`", inline=False)
     embed.add_field(name="💬 Social", value="`/hug, /slap, /kiss, /avatar, /say, /afk`", inline=False)
     embed.add_field(name="💰 Economy", value="`/balance, /daily`", inline=False)
     embed.add_field(name="⭐ Leveling [MEE6 STYLE]", value="`/rank, /leaderboard` - 15-25 XP per 60s! Level = 0.1 * sqrt(XP)", inline=False)
+    embed.add_field(name="🚨 Anti-Spam", value="`/spam setup, /spam disable` - 3 msgs / 5 sec = delete + DM Admins", inline=False)
     embed.add_field(name="🛠️ Utility", value="`/ping, /membercount, /meme, /giveaway, /help`", inline=False)
-    embed.set_footer(text="Blaze Fire Community 🔥 | MEE6 Style XP")
+    embed.set_footer(text="Blaze Fire Community 🔥 | MEE6 Style XP + Anti-Spam")
     await i.response.send_message(embed=embed)
 
-# ========= NEW MEE6 STYLE LV =========
+# ========= MEE6 STYLE LV + SPAM =========
 @bot.event
 async def on_message(message):
     if message.author.bot: return
 
     if message.guild:
+        # ANTI-SPAM CHECK FIRST
+        if await handle_spam(message.guild, message.author, message.channel):
+            return
+
         gid = str(message.guild.id)
         uid = str(message.author.id)
         now = datetime.datetime.now().timestamp()
@@ -367,8 +442,6 @@ async def on_message(message):
 
             if gid not in level_data: level_data[gid] = {}
             if uid not in level_data[gid]: level_data[gid][uid] = {"xp":0, "level":0, "msgs":0}
-
-            # keep old msgs count for backward compat
             if "xp" not in level_data[gid][uid]: level_data[gid][uid]["xp"] = 0
             if "msgs" not in level_data[gid][uid]: level_data[gid][uid]["msgs"] = 0
 
@@ -393,7 +466,6 @@ async def on_message(message):
                 if random.random() < 0.15:
                     save_json(LEVEL_FILE, level_data)
         else:
-            # still count messages even on cooldown
             if gid in level_data and uid in level_data[gid]:
                 level_data[gid][uid].setdefault("msgs",0)
                 level_data[gid][uid]["msgs"] += 1
